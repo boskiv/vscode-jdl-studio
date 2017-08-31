@@ -26,10 +26,15 @@ class JDLEntity {
     fields: JDLEntityField[];
 }
 
-class JDLRelationship {
+class JDLRelationshipField {
     source: string;
     type: string;
     target: string;
+}
+
+class JDLRelationship {
+    name: string;
+    fields: JDLRelationshipField[];
 }
 
 class JDLObj {
@@ -50,58 +55,99 @@ export class JDLParser {
             source_string = source_string.replace(/\t/g, ' ');
             // remove /**  */ comments
             source_string = source_string.replace(/\/\*\*.*?\*\//g, ' ');
-        let entities = this.getClass(source_string, 'entity');
-        let enums = this.getClass(source_string, 'enum');
-        let relationships = this.getClass(source_string, 'relationship');
+        
+        let result: JDLObj = this.parseClasses(source_string);
 
         
-        return source_string
+        return this.convertToNonoml(result)
     }
 
     private convertToNonoml(jdlObj: JDLObj) {
         let result = []
 
+        let directives = [
+            '#arrowSize: 1',
+            '#bendSize: 0.3',
+            '#direction: down | right',
+            '#gutter: 5',
+            '#edgeMargin: 0',
+            '#edges: hard | rounded',
+            '#fill: #eee8d5; #fdf6e3',
+            '#fillArrows: false',
+            '#font: Times',
+            '#fontSize: 12',
+            '#leading: 1.25',
+            '#lineWidth: 3',
+            '#padding: 8',
+            '#spacing: 40',
+            '#stroke: #33322E',
+            '#title: filename',
+            '#zoom: 1'
+        ]
+
+        let enums = jdlObj.Enums.map(jdl => {
+            return '['+jdl.name+'|'+jdl.fields.map(f => f.value).join(';')+']'
+        }).join('\n');
+
+        let entities = jdlObj.Entities.map( jdl => {
+            return `[${jdl.name}|${jdl.fields.map(f => f.name + ': ' + f.type).join(';')}]`
+        }).join('\n')
+
+        let relationships = jdlObj.Relationships.map( jdl => {
+            return jdl.fields.map(f => {
+                return `[${f.source}]-[${f.target}]`
+            }).join('\n')
+        }).join('\n')
+
+        return directives.join('\n') + '\n' + enums + '\n' + entities + '\n' + relationships
 
 
     }
 
-    private getClass(str, startWord) {
-        let results: JDLObj[] = [];
+    private parseClasses(str): JDLObj {
         let text;
-        let re = new RegExp(`${startWord}\\s(\\w.*?)\\s\\{(.*?)\\s\\}`,"g");
-      
+        let startWords = ['entity','enum', 'relationship']
+        
         let jdlObj: JDLObj = new JDLObj();
-            jdlObj.Entities = [];
-            jdlObj.Enums = [];
-            jdlObj.Relationships = [];
+        jdlObj.Entities = [];
+        jdlObj.Enums = [];
+        jdlObj.Relationships = [];
 
-        while(text = re.exec(str)) {
+        for( let startWord of startWords){
+
+            let re = new RegExp(`${startWord}\\s(\\w.*?)\\s\\{(.*?)\\s\\}`,"g");
+                
+            while(text = re.exec(str)) {
+                
+                switch(startWord) {
+                    case EntityType.Entity: {
+                        let jdlEntity: JDLEntity = new JDLEntity();
+                            jdlEntity.name = text[1].trim();
+                            jdlEntity.fields = this.parseEntityBody(text[2].trim(), startWord);
+                        jdlObj.Entities.push(jdlEntity);
+                        break;
+                    }
+                    case EntityType.Enum: {
+                        let jdlEnum: JDLEnum = new JDLEnum()
+                            jdlEnum.name = text[1].trim();
+                            jdlEnum.fields = this.parseEnumBody(text[2].trim(), startWord);
+                        jdlObj.Enums.push(jdlEnum);
+                        break;
+                    }
+                    case EntityType.Relationship: {
+                        let jdlRelationship: JDLRelationship = new JDLRelationship();
+                            jdlRelationship.name = text[1].trim();
+                            jdlRelationship.fields = this.parseRelationshipBody(text[2].trim(), startWord);
+                        jdlObj.Relationships.push(jdlRelationship);
+                        break;
+                    }
+                    default: {
+                        console.log("No EntityType matched");
+                        break;
+                    }
+                }
             
-            switch(startWord) {
-                case EntityType.Entity: {
-                    let jdlEntity: JDLEntity = new JDLEntity();
-                        jdlEntity.name = text[1].trim();
-                        jdlEntity.fields = this.parseEntityBody(text[2].trim(), startWord);
-                    jdlObj.Entities.push(jdlEntity);
-                    break;
-                }
-                case EntityType.Enum: {
-                    let jdlEnum: JDLEnum = new JDLEnum()
-                        jdlEnum.fields = this.parseEnumBody(text[2].trim(), startWord);
-                    jdlObj.Enums.push(jdlEnum);
-                    break;
-                }
-                case EntityType.Relationship: {
-                    let jdlRelationship: JDLRelationship = new JDLRelationship();
-                    jdlObj.Relationships.push(jdlRelationship);
-                    break;
-                }
-                default: {
-                    console.log("No EntityType matched");
-                    break;
-                }
             }
-          
         }
         return jdlObj;
     }
@@ -116,7 +162,7 @@ export class JDLParser {
         return this.extractEntity(fields);
     }
 
-    private parseRelationshipBody(body, startWord): JDLRelationship[] {
+    private parseRelationshipBody(body, startWord): JDLRelationshipField[] {
         let fields = body.split(',');
         return this.extractRelationship(fields);
     }
@@ -147,10 +193,10 @@ export class JDLParser {
         return result;
     }
 
-    private extractRelationship(fields): JDLRelationship[] {
-        let result: JDLRelationship[] = [];
+    private extractRelationship(fields): JDLRelationshipField[] {
+        let result: JDLRelationshipField[] = [];
         for (let field of fields) {
-            let parts = field.match(/(\w*)\{(.*?)\}\sto\s(\w*)/);
+            let parts = field.match(/(\w*)\{(.*?)\}\s+to\s+(\w*)/);
             let source = parts[1];
             let type = parts[2];
             let target = parts[3];
